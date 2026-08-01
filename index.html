@@ -194,6 +194,13 @@
     color:var(--leather);
     margin-top:2px;
   }
+  .card .series-line{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    color:var(--gilt);
+    margin-top:4px;
+    letter-spacing:0.02em;
+  }
   .card .notes{
     font-size:12.5px;
     margin-top:8px;
@@ -442,7 +449,8 @@
   </select>
   <select id="sortBy">
     <option value="title">Sort by title</option>
-    <option value="author">Sort by author</option>
+    <option value="author">Sort by author (last name)</option>
+    <option value="series">Sort by series</option>
     <option value="language">Sort by language</option>
     <option value="acquired">Sort by date acquired</option>
     <option value="read">Sort by date read</option>
@@ -451,7 +459,8 @@
   <select id="sortBySecondary">
     <option value="none">Then by…</option>
     <option value="title">Title</option>
-    <option value="author">Author</option>
+    <option value="author">Author (last name)</option>
+    <option value="series">Series, then # in series</option>
     <option value="language">Language</option>
     <option value="acquired">Date acquired</option>
     <option value="read">Date read</option>
@@ -509,6 +518,16 @@
     <div class="field">
       <label>ISBN <span style="text-transform:none; opacity:0.7;">(optional)</span></label>
       <input type="text" id="f_isbn" placeholder="e.g. 9780143039433">
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Series <span style="text-transform:none; opacity:0.7;">(leave blank if standalone)</span></label>
+        <input type="text" id="f_series" placeholder="e.g. The Broken Earth">
+      </div>
+      <div class="field">
+        <label># in Series</label>
+        <input type="text" id="f_seriesNumber" placeholder="e.g. 2" inputmode="decimal">
+      </div>
     </div>
     <div class="row3">
       <div class="field">
@@ -899,15 +918,39 @@ function renderStats(){
   $('stats').textContent = `${total} book${total===1?'':'s'} catalogued · showing ${shown}`;
 }
 
+// Extracts a last-name sort key whether the author is stored as "Doe, Jane"
+// or "Jane Doe" — always sorts by last name. Uses the first author if several.
+function authorSortKey(name){
+  const first = (name||'').split(';')[0].trim();
+  if(!first) return '';
+  if(first.includes(',')) return first.split(',')[0].trim();
+  const parts = first.split(/\s+/);
+  return parts.length > 1 ? parts[parts.length-1] : first;
+}
+
 function compareField(a, b, field){
   const str = (v)=> (v||'').trim();
   switch(field){
     case 'author': {
-      const av = str(a.author), bv = str(b.author);
+      const av = authorSortKey(a.author), bv = authorSortKey(b.author);
       if(!av && !bv) return 0;
       if(!av) return 1;
       if(!bv) return -1;
-      return av.localeCompare(bv);
+      return av.localeCompare(bv) || str(a.author).localeCompare(str(b.author));
+    }
+    case 'series': {
+      const as = str(a.series), bs = str(b.series);
+      if(!as && !bs) return 0;
+      if(!as) return 1; // standalone books sort after series
+      if(!bs) return -1;
+      const c = as.localeCompare(bs);
+      if(c!==0) return c;
+      const an = parseFloat(a.seriesNumber), bn = parseFloat(b.seriesNumber);
+      const aHas = !isNaN(an), bHas = !isNaN(bn);
+      if(!aHas && !bHas) return 0;
+      if(!aHas) return 1;
+      if(!bHas) return -1;
+      return an - bn;
     }
     case 'language': {
       const av = str(a.language), bv = str(b.language);
@@ -968,6 +1011,11 @@ function dateRange(started, finished){
   return '';
 }
 
+function seriesLabel(b){
+  if(!b.series) return '';
+  return b.seriesNumber ? `${b.series} #${b.seriesNumber}` : b.series;
+}
+
 function openView(b){
   const status = b.status || 'tbr';
   const loc = (b.bookcase || b.shelf || b.position)
@@ -977,6 +1025,7 @@ function openView(b){
 
   let rows = '';
   rows += `<div class="view-row"><span class="vk">Category</span><span class="vv">${escapeHtml(b.category||'—')}</span></div>`;
+  rows += `<div class="view-row"><span class="vk">Series</span><span class="vv">${b.series ? escapeHtml(seriesLabel(b)) : 'Standalone'}</span></div>`;
   rows += `<div class="view-row"><span class="vk">Location</span><span class="vv">${loc}</span></div>`;
   if(b.isbn) rows += `<div class="view-row"><span class="vk">ISBN</span><span class="vv">${escapeHtml(b.isbn)}</span></div>`;
   rows += `<div class="view-row"><span class="vk">Status</span><span class="vv"><span class="badge ${status}">${statusLabel(status)}</span></span></div>`;
@@ -1021,6 +1070,7 @@ function bookCard(b){
   div.innerHTML = `
     <div class="title">${escapeHtml(b.title)}</div>
     <div class="author">${escapeHtml(b.author||'')}</div>
+    ${b.series ? `<div class="series-line">${escapeHtml(seriesLabel(b))}</div>` : ''}
     <div class="meta-line">
       <span class="badge ${status}">${statusLabel(status)}</span>
       ${metaBits.length ? ' · ' + metaBits.map(escapeHtml).join(' · ') : ''}
@@ -1184,6 +1234,8 @@ function openForm(book, prefill){
   $('f_category').value = book ? book.category : (categories[0]?.name||'');
   $('f_language').value = book ? book.language||'' : (p.language||'');
   $('f_isbn').value = book ? book.isbn||'' : (p.isbn||'');
+  $('f_series').value = book ? book.series||'' : '';
+  $('f_seriesNumber').value = book ? book.seriesNumber||'' : '';
   $('f_bookcase').value = book ? book.bookcase||'' : '';
   $('f_shelf').value = book ? book.shelf||'' : '';
   $('f_position').value = book ? book.position||'' : '';
@@ -1222,6 +1274,8 @@ $('bookForm').onsubmit = async (e)=>{
     category: $('f_category').value,
     language: $('f_language').value.trim(),
     isbn: $('f_isbn').value.trim(),
+    series: $('f_series').value.trim(),
+    seriesNumber: $('f_seriesNumber').value.trim(),
     bookcase: $('f_bookcase').value.trim(),
     shelf: $('f_shelf').value.trim(),
     position: $('f_position').value.trim(),
@@ -1340,6 +1394,16 @@ function normalizeIsbn(raw){
   return (raw||'').replace(/[^0-9Xx]/g, '').toUpperCase();
 }
 
+function toLastFirst(name){
+  name = (name||'').trim();
+  if(!name || name.includes(',')) return name;
+  const parts = name.split(/\s+/);
+  if(parts.length < 2) return name;
+  const last = parts[parts.length - 1];
+  const rest = parts.slice(0, -1).join(' ');
+  return `${last}, ${rest}`;
+}
+
 async function lookupIsbn(isbnRaw){
   const isbn = normalizeIsbn(isbnRaw);
   if(!isbn){ return {ok:false, reason:'empty'}; }
@@ -1350,7 +1414,7 @@ async function lookupIsbn(isbnRaw){
     const entry = data[`ISBN:${isbn}`];
     if(!entry) return {ok:false, reason:'not_found', isbn};
     const title = entry.title || '';
-    const author = (entry.authors||[]).map(a=>a.name).join(', ');
+    const author = (entry.authors||[]).map(a=>toLastFirst(a.name)).join('; ');
     return {ok:true, isbn, title, author};
   }catch(e){
     return {ok:false, reason:'blocked', isbn};
