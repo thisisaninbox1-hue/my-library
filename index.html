@@ -246,6 +246,24 @@
   .badge.tbr{ background:#E7DEC7; color:var(--leather); }
   .badge.reading{ background:var(--gilt); color:var(--ink); }
   .badge.read{ background:#33513E; color:var(--paper); }
+  .badge-select{
+    display:inline-block;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    padding:2px 7px;
+    border-radius:10px;
+    font-weight:500;
+    border:none;
+    cursor:pointer;
+    appearance:none;
+    -webkit-appearance:none;
+    -moz-appearance:none;
+  }
+  .badge-select.tbr{ background:#E7DEC7; color:var(--leather); }
+  .badge-select.reading{ background:var(--gilt); color:var(--ink); }
+  .badge-select.read{ background:#33513E; color:var(--paper); }
   .card .meta-line{
     font-family:'IBM Plex Mono', monospace;
     font-size:11px;
@@ -367,6 +385,7 @@
     margin-bottom:14px;
   }
   .card{ cursor:pointer; }
+
   .toast{
     position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
     background:var(--ink); color:var(--paper);
@@ -479,6 +498,7 @@
   <button class="btn secondary" id="isbnBtn">Add by ISBN</button>
   <button class="btn secondary" id="scanBtn">Scan Barcode</button>
   <button class="btn secondary" id="manageCatBtn">Categories</button>
+  <button class="btn secondary" id="cardDisplayBtn">Card Display</button>
   <button class="btn secondary" id="cloudBtn">Cloud Sync</button>
   <button class="btn secondary" id="exportBtn">Export Backup</button>
   <button class="btn secondary" id="importBtn">Import Backup</button>
@@ -539,8 +559,8 @@
         <input type="text" id="f_shelf" placeholder="e.g. 2">
       </div>
       <div class="field">
-        <label>Position</label>
-        <input type="text" id="f_position" placeholder="e.g. left, top">
+        <label>Position <span style="text-transform:none; opacity:0.7;">(# on shelf)</span></label>
+        <input type="text" id="f_position" placeholder="e.g. 5, or 1-2 for a set" inputmode="text">
       </div>
     </div>
     <div class="row2">
@@ -602,6 +622,19 @@
     </div>
     <div class="form-actions">
       <button type="button" class="btn secondary" id="closeCatBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="cardDisplayOverlay">
+  <div class="form-card">
+    <h2>Card Display</h2>
+    <p style="font-size:12.5px; color:var(--leather); margin:-6px 0 14px; text-align:center;">
+      Choose what shows up on each book card. This doesn't delete anything — it's just what's visible at a glance.
+    </p>
+    <div id="cardDisplayList" style="display:flex; flex-direction:column; gap:10px; margin-bottom:8px;"></div>
+    <div class="form-actions">
+      <button type="button" class="btn secondary" id="closeCardDisplayBtn">Close</button>
     </div>
   </div>
 </div>
@@ -709,6 +742,18 @@ let categories = [];
 let activeCategory = 'All';
 let editingId = null;
 
+const DEFAULT_CARD_SETTINGS = {
+  showSeries: true,
+  showLanguage: true,
+  showAcquired: true,
+  showReadDates: true,
+  showRereads: true,
+  showNotes: true,
+  showLocation: true,
+  showIsbn: true
+};
+let cardSettings = {...DEFAULT_CARD_SETTINGS};
+
 const $ = (id) => document.getElementById(id);
 
 function toast(msg){
@@ -803,6 +848,10 @@ async function loadAll(){
     const c = localStorage.getItem('mylibrary_categories');
     categories = c ? JSON.parse(c) : DEFAULT_CATEGORIES;
   }catch(e){ categories = DEFAULT_CATEGORIES.slice(); }
+  try{
+    const s = localStorage.getItem('mylibrary_card_settings');
+    cardSettings = s ? {...DEFAULT_CARD_SETTINGS, ...JSON.parse(s)} : {...DEFAULT_CARD_SETTINGS};
+  }catch(e){ cardSettings = {...DEFAULT_CARD_SETTINGS}; }
 
   const savedCloud = loadCloudConfig();
   if(savedCloud){
@@ -828,6 +877,11 @@ async function saveCategories(){
   if(cloudConfig){
     try{ await cloudPush(); }catch(e){ toast('Saved locally, but cloud sync failed — check your connection'); }
   }
+}
+async function saveCardSettings(){
+  try{
+    localStorage.setItem('mylibrary_card_settings', JSON.stringify(cardSettings));
+  }catch(e){ toast('Could not save display settings'); }
 }
 
 function catColor(name){
@@ -1055,29 +1109,38 @@ function bookCard(b){
   const div = document.createElement('div');
   div.className = 'card';
   div.style.borderLeftColor = catColor(b.category);
-  const loc = (b.bookcase || b.shelf || b.position)
-    ? `BC ${escapeHtml(b.bookcase||'—')} · S ${escapeHtml(b.shelf||'—')}${b.position ? ' · ' + escapeHtml(b.position) : ''}`
+  const hasLoc = b.bookcase || b.shelf || b.position;
+  const loc = hasLoc
+    ? `BC ${escapeHtml(b.bookcase||'—')} · S ${escapeHtml(b.shelf||'—')}${b.position ? ' · #' + escapeHtml(b.position) : ''}`
     : 'unplaced';
   const status = b.status || 'tbr';
   const rereads = (b.rereads||[]).filter(r=>r && (r.started || r.finished));
   const metaBits = [];
-  if(b.language) metaBits.push(b.language);
-  if(b.acquired) metaBits.push(`Acquired ${yearOf(b.acquired)}`);
-  if((status==='read' || status==='reading') && (b.readStarted || b.readFinished)){
+  if(cardSettings.showLanguage && b.language) metaBits.push(b.language);
+  if(cardSettings.showAcquired && b.acquired) metaBits.push(`Acquired ${yearOf(b.acquired)}`);
+  if(cardSettings.showReadDates && (status==='read' || status==='reading') && (b.readStarted || b.readFinished)){
     metaBits.push(dateRange(b.readStarted, b.readFinished));
   }
-  rereads.forEach(r=>metaBits.push(`Reread: ${dateRange(r.started, r.finished)}`));
+  if(cardSettings.showRereads){
+    rereads.forEach(r=>metaBits.push(`Reread: ${dateRange(r.started, r.finished)}`));
+  }
+  const statusOptions = ['tbr','reading','read']
+    .map(s=>`<option value="${s}" ${s===status?'selected':''}>${statusLabel(s)}</option>`)
+    .join('');
+  const footerLoc = cardSettings.showLocation ? loc : '';
+  const footerIsbn = (cardSettings.showIsbn && b.isbn) ? escapeHtml(b.isbn) : '';
+  const footerLeft = [footerLoc, footerIsbn].filter(Boolean).join(' · ');
   div.innerHTML = `
     <div class="title">${escapeHtml(b.title)}</div>
     <div class="author">${escapeHtml(b.author||'')}</div>
-    ${b.series ? `<div class="series-line">${escapeHtml(seriesLabel(b))}</div>` : ''}
+    ${(cardSettings.showSeries && b.series) ? `<div class="series-line">${escapeHtml(seriesLabel(b))}</div>` : ''}
     <div class="meta-line">
-      <span class="badge ${status}">${statusLabel(status)}</span>
+      <select class="badge-select ${status}">${statusOptions}</select>
       ${metaBits.length ? ' · ' + metaBits.map(escapeHtml).join(' · ') : ''}
     </div>
-    ${b.notes ? `<div class="notes">${escapeHtml(b.notes)}</div>` : ''}
+    ${(cardSettings.showNotes && b.notes) ? `<div class="notes">${escapeHtml(b.notes)}</div>` : ''}
     <div class="footer">
-      <span class="callnum">${loc}${b.isbn ? ` · ${escapeHtml(b.isbn)}` : ''}</span>
+      <span class="callnum">${footerLeft || '\u00A0'}</span>
       <span class="actions">
         <button class="edit">edit</button>
         <button class="del">remove</button>
@@ -1087,6 +1150,17 @@ function bookCard(b){
   div.onclick = ()=>openView(b);
   div.querySelector('.edit').onclick = (e)=>{ e.stopPropagation(); openForm(b); };
   div.querySelector('.del').onclick = (e)=>{ e.stopPropagation(); removeBook(b.id); };
+  const statusSelect = div.querySelector('.badge-select');
+  statusSelect.onclick = (e)=> e.stopPropagation();
+  statusSelect.onchange = async (e)=>{
+    e.stopPropagation();
+    const bookRef = books.find(x=>x.id===b.id);
+    if(bookRef){
+      bookRef.status = e.target.value;
+      await saveBooks();
+      render();
+    }
+  };
   return div;
 }
 
@@ -1232,7 +1306,7 @@ function openForm(book, prefill){
   $('f_title').value = book ? book.title : (p.title||'');
   $('f_author').value = book ? book.author||'' : (p.author||'');
   $('f_category').value = book ? book.category : (categories[0]?.name||'');
-  $('f_language').value = book ? book.language||'' : (p.language||'');
+  $('f_language').value = book ? book.language||'' : (p.language || 'English');
   $('f_isbn').value = book ? book.isbn||'' : (p.isbn||'');
   $('f_series').value = book ? book.series||'' : '';
   $('f_seriesNumber').value = book ? book.seriesNumber||'' : '';
@@ -1240,7 +1314,7 @@ function openForm(book, prefill){
   $('f_shelf').value = book ? book.shelf||'' : '';
   $('f_position').value = book ? book.position||'' : '';
   $('f_status').value = book ? (book.status||'tbr') : 'tbr';
-  $('f_acquired').value = book ? (book.acquired||'') : new Date().toISOString().slice(0,10);
+  $('f_acquired').value = book ? (book.acquired||'') : '';
   $('f_readStarted').value = book ? (book.readStarted||'') : '';
   $('f_readFinished').value = book ? (book.readFinished||'') : '';
   $('rereadList').innerHTML = '';
@@ -1371,6 +1445,39 @@ function renderCatList(){
 
 $('manageCatBtn').onclick = ()=>{ renderCatList(); $('catOverlay').classList.remove('hidden'); };
 $('closeCatBtn').onclick = ()=>$('catOverlay').classList.add('hidden');
+
+// ---- Card Display settings ----
+const CARD_DISPLAY_OPTIONS = [
+  {key:'showSeries', label:'Series & number'},
+  {key:'showLanguage', label:'Language'},
+  {key:'showAcquired', label:'Date acquired'},
+  {key:'showReadDates', label:'Read start/finish dates'},
+  {key:'showRereads', label:'Reread dates'},
+  {key:'showNotes', label:'Notes'},
+  {key:'showLocation', label:'Shelf location (bookcase/shelf/position)'},
+  {key:'showIsbn', label:'ISBN'},
+];
+
+function renderCardDisplayList(){
+  const el = $('cardDisplayList');
+  el.innerHTML = CARD_DISPLAY_OPTIONS.map(opt=>`
+    <label style="display:flex; align-items:center; gap:9px; font-size:13.5px; cursor:pointer;">
+      <input type="checkbox" class="cd-toggle" data-key="${opt.key}" ${cardSettings[opt.key] ? 'checked' : ''} style="width:16px; height:16px; accent-color:var(--green);">
+      ${opt.label}
+    </label>
+  `).join('');
+  el.querySelectorAll('.cd-toggle').forEach(cb=>{
+    cb.onchange = async ()=>{
+      cardSettings[cb.dataset.key] = cb.checked;
+      await saveCardSettings();
+      render();
+    };
+  });
+}
+
+$('cardDisplayBtn').onclick = ()=>{ renderCardDisplayList(); $('cardDisplayOverlay').classList.remove('hidden'); };
+$('closeCardDisplayBtn').onclick = ()=>$('cardDisplayOverlay').classList.add('hidden');
+$('cardDisplayOverlay').onclick = (e)=>{ if(e.target.id==='cardDisplayOverlay') $('cardDisplayOverlay').classList.add('hidden'); };
 $('catOverlay').onclick = (e)=>{ if(e.target.id==='catOverlay') $('catOverlay').classList.add('hidden'); };
 
 $('addCatBtn').onclick = async ()=>{
