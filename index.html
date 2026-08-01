@@ -264,6 +264,23 @@
   .badge-select.tbr{ background:#E7DEC7; color:var(--leather); }
   .badge-select.reading{ background:var(--gilt); color:var(--ink); }
   .badge-select.read{ background:#33513E; color:var(--paper); }
+  .editable{
+    cursor:text;
+    border-bottom:1px dashed transparent;
+    transition:border-color 0.15s;
+  }
+  .editable:hover{ border-bottom-color:var(--leather); }
+  .editable.empty{ opacity:0.5; font-style:italic; }
+  .inline-edit-input{
+    font-family:inherit;
+    font-size:inherit;
+    color:var(--ink);
+    background:var(--paper);
+    border:1px solid var(--leather);
+    border-radius:2px;
+    padding:1px 3px;
+  }
+  .inline-edit-input.wide{ width:100%; display:block; margin-top:4px; }
   .card .meta-line{
     font-family:'IBM Plex Mono', monospace;
     font-size:11px;
@@ -1105,42 +1122,112 @@ function openView(b){
 }
 $('viewOverlay').onclick = (e)=>{ if(e.target.id==='viewOverlay') $('viewOverlay').classList.add('hidden'); };
 
+function bindInlineEditable(container, book){
+  container.querySelectorAll('.editable').forEach(el=>{
+    el.onclick = (e)=>{
+      e.stopPropagation();
+      startInlineEdit(el, book);
+    };
+  });
+}
+
+function startInlineEdit(el, book){
+  if(el.querySelector('input, textarea')) return; // already editing
+  const field = el.dataset.field;
+  const type = el.dataset.type || 'text';
+  const original = book[field] || '';
+  let inputEl;
+  if(type === 'textarea'){
+    inputEl = document.createElement('textarea');
+    inputEl.value = original;
+    inputEl.rows = 2;
+    inputEl.className = 'inline-edit-input wide';
+  } else {
+    inputEl = document.createElement('input');
+    inputEl.type = type;
+    inputEl.value = original;
+    inputEl.className = 'inline-edit-input';
+    if(type === 'text'){
+      inputEl.size = Math.max(3, Math.min(34, (original || el.textContent || '').length + 2));
+    }
+  }
+  inputEl.onclick = (e)=> e.stopPropagation();
+  let committed = false;
+  const commit = async ()=>{
+    if(committed) return;
+    committed = true;
+    const newVal = typeof inputEl.value === 'string' ? inputEl.value.trim() : inputEl.value;
+    const bookRef = books.find(x=>x.id===book.id);
+    if(bookRef && (bookRef[field]||'') !== newVal){
+      bookRef[field] = newVal;
+      await saveBooks();
+    }
+    render();
+  };
+  inputEl.addEventListener('blur', commit);
+  inputEl.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter' && type!=='textarea'){ e.preventDefault(); inputEl.blur(); }
+    else if(e.key==='Escape'){ committed = true; render(); }
+  });
+  el.innerHTML = '';
+  el.appendChild(inputEl);
+  inputEl.focus();
+  if(inputEl.select) inputEl.select();
+}
+
 function bookCard(b){
   const div = document.createElement('div');
   div.className = 'card';
   div.style.borderLeftColor = catColor(b.category);
-  const hasLoc = b.bookcase || b.shelf || b.position;
-  const loc = hasLoc
-    ? `BC ${escapeHtml(b.bookcase||'—')} · S ${escapeHtml(b.shelf||'—')}${b.position ? ' · #' + escapeHtml(b.position) : ''}`
-    : 'unplaced';
   const status = b.status || 'tbr';
   const rereads = (b.rereads||[]).filter(r=>r && (r.started || r.finished));
-  const metaBits = [];
-  if(cardSettings.showLanguage && b.language) metaBits.push(b.language);
-  if(cardSettings.showAcquired && b.acquired) metaBits.push(`Acquired ${yearOf(b.acquired)}`);
+
+  const metaParts = [];
+  if(cardSettings.showLanguage && b.language){
+    metaParts.push(`<span class="editable" data-field="language" data-type="text">${escapeHtml(b.language)}</span>`);
+  }
+  if(cardSettings.showAcquired && b.acquired){
+    metaParts.push(`Acquired <span class="editable" data-field="acquired" data-type="date">${escapeHtml(yearOf(b.acquired))}</span>`);
+  }
   if(cardSettings.showReadDates && (status==='read' || status==='reading') && (b.readStarted || b.readFinished)){
-    metaBits.push(dateRange(b.readStarted, b.readFinished));
+    if(b.readStarted) metaParts.push(`Started <span class="editable" data-field="readStarted" data-type="date">${escapeHtml(b.readStarted)}</span>`);
+    if(b.readFinished) metaParts.push(`Finished <span class="editable" data-field="readFinished" data-type="date">${escapeHtml(b.readFinished)}</span>`);
   }
   if(cardSettings.showRereads){
-    rereads.forEach(r=>metaBits.push(`Reread: ${dateRange(r.started, r.finished)}`));
+    rereads.forEach(r=>metaParts.push(`Reread: ${escapeHtml(dateRange(r.started, r.finished))}`));
   }
+
   const statusOptions = ['tbr','reading','read']
     .map(s=>`<option value="${s}" ${s===status?'selected':''}>${statusLabel(s)}</option>`)
     .join('');
-  const footerLoc = cardSettings.showLocation ? loc : '';
-  const footerIsbn = (cardSettings.showIsbn && b.isbn) ? escapeHtml(b.isbn) : '';
-  const footerLeft = [footerLoc, footerIsbn].filter(Boolean).join(' · ');
+
+  const footerLocHtml = cardSettings.showLocation
+    ? `BC <span class="editable ${b.bookcase?'':'empty'}" data-field="bookcase" data-type="text">${escapeHtml(b.bookcase||'—')}</span> · S <span class="editable ${b.shelf?'':'empty'}" data-field="shelf" data-type="text">${escapeHtml(b.shelf||'—')}</span> · # <span class="editable ${b.position?'':'empty'}" data-field="position" data-type="text">${escapeHtml(b.position||'—')}</span>`
+    : '';
+  const footerIsbnHtml = (cardSettings.showIsbn && b.isbn)
+    ? `<span class="editable" data-field="isbn" data-type="text">${escapeHtml(b.isbn)}</span>`
+    : '';
+  const footerPieces = [footerLocHtml, footerIsbnHtml].filter(Boolean);
+
+  const seriesHtml = (cardSettings.showSeries && b.series)
+    ? `<div class="series-line"><span class="editable" data-field="series" data-type="text">${escapeHtml(b.series)}</span>${
+        b.seriesNumber
+          ? ` #<span class="editable" data-field="seriesNumber" data-type="text">${escapeHtml(b.seriesNumber)}</span>`
+          : ` <span class="editable empty" data-field="seriesNumber" data-type="text">+#</span>`
+      }</div>`
+    : '';
+
   div.innerHTML = `
-    <div class="title">${escapeHtml(b.title)}</div>
-    <div class="author">${escapeHtml(b.author||'')}</div>
-    ${(cardSettings.showSeries && b.series) ? `<div class="series-line">${escapeHtml(seriesLabel(b))}</div>` : ''}
+    <div class="title"><span class="editable" data-field="title" data-type="text">${escapeHtml(b.title)}</span></div>
+    <div class="author"><span class="editable" data-field="author" data-type="text">${escapeHtml(b.author||'')}</span></div>
+    ${seriesHtml}
     <div class="meta-line">
       <select class="badge-select ${status}">${statusOptions}</select>
-      ${metaBits.length ? ' · ' + metaBits.map(escapeHtml).join(' · ') : ''}
+      ${metaParts.length ? ' · ' + metaParts.join(' · ') : ''}
     </div>
-    ${(cardSettings.showNotes && b.notes) ? `<div class="notes">${escapeHtml(b.notes)}</div>` : ''}
+    ${(cardSettings.showNotes && b.notes) ? `<div class="notes"><span class="editable" data-field="notes" data-type="textarea">${escapeHtml(b.notes)}</span></div>` : ''}
     <div class="footer">
-      <span class="callnum">${footerLeft || '\u00A0'}</span>
+      <span class="callnum">${footerPieces.length ? footerPieces.join(' · ') : '\u00A0'}</span>
       <span class="actions">
         <button class="edit">edit</button>
         <button class="del">remove</button>
@@ -1161,6 +1248,7 @@ function bookCard(b){
       render();
     }
   };
+  bindInlineEditable(div, b);
   return div;
 }
 
