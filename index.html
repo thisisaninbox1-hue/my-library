@@ -437,13 +437,25 @@
     <option value="category">Group by category</option>
     <option value="bookcase">Group by bookcase</option>
     <option value="status">Group by status</option>
+    <option value="language">Group by language</option>
     <option value="flat">Flat list</option>
   </select>
   <select id="sortBy">
     <option value="title">Sort by title</option>
     <option value="author">Sort by author</option>
+    <option value="language">Sort by language</option>
     <option value="acquired">Sort by date acquired</option>
     <option value="read">Sort by date read</option>
+    <option value="status">Sort by status</option>
+  </select>
+  <select id="sortBySecondary">
+    <option value="none">Then by…</option>
+    <option value="title">Title</option>
+    <option value="author">Author</option>
+    <option value="language">Language</option>
+    <option value="acquired">Date acquired</option>
+    <option value="read">Date read</option>
+    <option value="status">Status</option>
   </select>
   <select id="statusFilter">
     <option value="all">All statuses</option>
@@ -453,6 +465,7 @@
   </select>
   <select id="acquiredYearFilter"><option value="all">Any acquired year</option></select>
   <select id="readYearFilter"><option value="all">Any read year</option></select>
+  <select id="languageFilter"><option value="all">Any language</option></select>
   <button class="btn" id="addBtn">+ Add Book</button>
   <button class="btn secondary" id="isbnBtn">Add by ISBN</button>
   <button class="btn secondary" id="scanBtn">Scan Barcode</button>
@@ -482,6 +495,16 @@
     <div class="field">
       <label>Category / Edition</label>
       <select id="f_category"></select>
+    </div>
+    <div class="field">
+      <label>Language <span style="text-transform:none; opacity:0.7;">(optional)</span></label>
+      <input type="text" id="f_language" list="languageOptions" placeholder="e.g. English">
+      <datalist id="languageOptions">
+        <option value="English"><option value="Spanish"><option value="French">
+        <option value="German"><option value="Italian"><option value="Portuguese">
+        <option value="Japanese"><option value="Korean"><option value="Mandarin">
+        <option value="Russian"><option value="Arabic">
+      </datalist>
     </div>
     <div class="field">
       <label>ISBN <span style="text-transform:none; opacity:0.7;">(optional)</span></label>
@@ -844,6 +867,13 @@ function updateYearFilters(){
   readSel.innerHTML = '<option value="all">Any read year</option>' +
     readYears.map(y=>`<option value="${y}">${y}</option>`).join('');
   readSel.value = readYears.includes(prevRead) ? prevRead : 'all';
+
+  const languages = [...new Set(books.map(b=>(b.language||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const langSel = $('languageFilter');
+  const prevLang = langSel.value;
+  langSel.innerHTML = '<option value="all">Any language</option>' +
+    languages.map(l=>`<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join('');
+  langSel.value = languages.includes(prevLang) ? prevLang : 'all';
 }
 
 function filteredBooks(){
@@ -851,13 +881,15 @@ function filteredBooks(){
   const status = $('statusFilter').value;
   const acqYear = $('acquiredYearFilter').value;
   const readYear = $('readYearFilter').value;
+  const lang = $('languageFilter').value;
   return books.filter(b=>{
     const matchCat = activeCategory==='All' || b.category===activeCategory;
     const matchQ = !q || (b.title||'').toLowerCase().includes(q) || (b.author||'').toLowerCase().includes(q);
     const matchStatus = status==='all' || (b.status||'tbr')===status;
     const matchAcq = acqYear==='all' || yearOf(b.acquired)===acqYear;
     const matchRead = readYear==='all' || readYearsFor(b).includes(readYear);
-    return matchCat && matchQ && matchStatus && matchAcq && matchRead;
+    const matchLang = lang==='all' || (b.language||'').trim()===lang;
+    return matchCat && matchQ && matchStatus && matchAcq && matchRead && matchLang;
   });
 }
 
@@ -867,25 +899,60 @@ function renderStats(){
   $('stats').textContent = `${total} book${total===1?'':'s'} catalogued · showing ${shown}`;
 }
 
+function compareField(a, b, field){
+  const str = (v)=> (v||'').trim();
+  switch(field){
+    case 'author': {
+      const av = str(a.author), bv = str(b.author);
+      if(!av && !bv) return 0;
+      if(!av) return 1;
+      if(!bv) return -1;
+      return av.localeCompare(bv);
+    }
+    case 'language': {
+      const av = str(a.language), bv = str(b.language);
+      if(!av && !bv) return 0;
+      if(!av) return 1;
+      if(!bv) return -1;
+      return av.localeCompare(bv);
+    }
+    case 'acquired': {
+      const av = a.acquired, bv = b.acquired;
+      if(!av && !bv) return 0;
+      if(!av) return 1;
+      if(!bv) return -1;
+      return bv.localeCompare(av);
+    }
+    case 'read': {
+      const av = a.readFinished || a.readStarted, bv = b.readFinished || b.readStarted;
+      if(!av && !bv) return 0;
+      if(!av) return 1;
+      if(!bv) return -1;
+      return bv.localeCompare(av);
+    }
+    case 'status': {
+      const order = {reading:0, tbr:1, read:2};
+      const av = order[a.status||'tbr'] ?? 1;
+      const bv = order[b.status||'tbr'] ?? 1;
+      return av - bv;
+    }
+    case 'title':
+    default:
+      return a.title.localeCompare(b.title);
+  }
+}
+
 function sortComparator(a,b){
-  const mode = $('sortBy').value;
-  if(mode==='author'){
-    const av = (a.author||'').trim();
-    const bv = (b.author||'').trim();
-    if(!av && !bv) return a.title.localeCompare(b.title);
-    if(!av) return 1;
-    if(!bv) return -1;
-    return av.localeCompare(bv) || a.title.localeCompare(b.title);
+  const primary = $('sortBy').value;
+  const secondary = $('sortBySecondary') ? $('sortBySecondary').value : 'none';
+  let result = compareField(a,b,primary);
+  if(result===0 && secondary && secondary!=='none'){
+    result = compareField(a,b,secondary);
   }
-  if(mode==='acquired' || mode==='read'){
-    const av = mode==='acquired' ? a.acquired : (a.readFinished || a.readStarted);
-    const bv = mode==='acquired' ? b.acquired : (b.readFinished || b.readStarted);
-    if(!av && !bv) return a.title.localeCompare(b.title);
-    if(!av) return 1;
-    if(!bv) return -1;
-    return bv.localeCompare(av) || a.title.localeCompare(b.title); // newest first
+  if(result===0){
+    result = a.title.localeCompare(b.title);
   }
-  return a.title.localeCompare(b.title);
+  return result;
 }
 
 function statusLabel(status){
@@ -945,6 +1012,7 @@ function bookCard(b){
   const status = b.status || 'tbr';
   const rereads = (b.rereads||[]).filter(r=>r && (r.started || r.finished));
   const metaBits = [];
+  if(b.language) metaBits.push(b.language);
   if(b.acquired) metaBits.push(`Acquired ${yearOf(b.acquired)}`);
   if((status==='read' || status==='reading') && (b.readStarted || b.readFinished)){
     metaBits.push(dateRange(b.readStarted, b.readFinished));
@@ -1063,6 +1131,26 @@ function render(){
       groups[k].sort(sortComparator).forEach(b=>grid.appendChild(bookCard(b)));
       content.appendChild(grid);
     });
+    return;
+  }
+
+  if(mode==='language'){
+    const groups = {};
+    list.forEach(b=>{
+      const key = (b.language||'').trim() || 'Unspecified';
+      groups[key] = groups[key] || [];
+      groups[key].push(b);
+    });
+    Object.keys(groups).sort((a,b)=> a==='Unspecified' ? 1 : b==='Unspecified' ? -1 : a.localeCompare(b)).forEach(k=>{
+      const header = document.createElement('div');
+      header.className = 'section-header';
+      header.innerHTML = `${escapeHtml(k)} <span style="font-weight:400; opacity:0.7;">(${groups[k].length})</span>`;
+      content.appendChild(header);
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      groups[k].sort(sortComparator).forEach(b=>grid.appendChild(bookCard(b)));
+      content.appendChild(grid);
+    });
   }
 }
 
@@ -1094,6 +1182,7 @@ function openForm(book, prefill){
   $('f_title').value = book ? book.title : (p.title||'');
   $('f_author').value = book ? book.author||'' : (p.author||'');
   $('f_category').value = book ? book.category : (categories[0]?.name||'');
+  $('f_language').value = book ? book.language||'' : (p.language||'');
   $('f_isbn').value = book ? book.isbn||'' : (p.isbn||'');
   $('f_bookcase').value = book ? book.bookcase||'' : '';
   $('f_shelf').value = book ? book.shelf||'' : '';
@@ -1131,6 +1220,7 @@ $('bookForm').onsubmit = async (e)=>{
     title: $('f_title').value.trim(),
     author: $('f_author').value.trim(),
     category: $('f_category').value,
+    language: $('f_language').value.trim(),
     isbn: $('f_isbn').value.trim(),
     bookcase: $('f_bookcase').value.trim(),
     shelf: $('f_shelf').value.trim(),
@@ -1160,9 +1250,11 @@ $('bookForm').onsubmit = async (e)=>{
 $('search').oninput = render;
 $('viewMode').onchange = render;
 $('sortBy').onchange = render;
+$('sortBySecondary').onchange = render;
 $('statusFilter').onchange = render;
 $('acquiredYearFilter').onchange = render;
 $('readYearFilter').onchange = render;
+$('languageFilter').onchange = render;
 
 // Category management
 function renderCatList(){
@@ -1173,12 +1265,40 @@ function renderCatList(){
     const row = document.createElement('div');
     row.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:13px;';
     row.innerHTML = `
-      <span style="width:12px;height:12px;border-radius:50%;background:${c.color};display:inline-block;"></span>
-      <span style="flex:1;">${escapeHtml(c.name)} <span style="opacity:0.6; font-family:'IBM Plex Mono',monospace; font-size:11px;">(${count})</span></span>
+      <span style="width:12px;height:12px;border-radius:50%;background:${c.color};display:inline-block; flex:0 0 auto;"></span>
+      <input type="text" class="cat-rename" data-i="${i}" value="${escapeHtml(c.name)}"
+        style="flex:1; min-width:0; font-family:'Source Serif 4',serif; font-size:13px; border:1px solid transparent; background:transparent; padding:3px 5px; border-radius:3px; color:var(--ink);">
+      <span style="opacity:0.6; font-family:'IBM Plex Mono',monospace; font-size:11px; white-space:nowrap;">(${count})</span>
       <button type="button" class="del-cat" data-i="${i}" style="background:none;border:none;color:var(--rose);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;text-decoration:underline;">remove</button>
     `;
     el.appendChild(row);
   });
+
+  el.querySelectorAll('.cat-rename').forEach(input=>{
+    input.addEventListener('focus', ()=>{ input.style.borderColor = 'var(--leather)'; });
+    input.addEventListener('keydown', e=>{ if(e.key==='Enter') input.blur(); });
+    input.addEventListener('blur', async ()=>{
+      input.style.borderColor = 'transparent';
+      const i = parseInt(input.dataset.i);
+      const oldName = categories[i].name;
+      const newName = input.value.trim();
+      if(!newName || newName===oldName){ input.value = oldName; return; }
+      if(categories.some((c,idx)=> idx!==i && c.name.toLowerCase()===newName.toLowerCase())){
+        toast('That category name already exists');
+        input.value = oldName;
+        return;
+      }
+      categories[i].name = newName;
+      books.forEach(b=>{ if(b.category===oldName) b.category = newName; });
+      await saveCategories();
+      await saveBooks();
+      renderCatList();
+      renderTabs();
+      render();
+      toast('Category renamed');
+    });
+  });
+
   el.querySelectorAll('.del-cat').forEach(btn=>{
     btn.onclick = async ()=>{
       const i = parseInt(btn.dataset.i);
